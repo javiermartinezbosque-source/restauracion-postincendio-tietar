@@ -18,6 +18,9 @@
 //        3 moderada-alta (440–659) · 4 alta (≥ 660)
 //   6. RBR (Relativized Burn Ratio, Parks et al. 2014) como métrica
 //      complementaria, más comparable entre tipos de vegetación.
+//   7. El polígono une los incendios simultáneos de Ávila y Madrid: se
+//      separa por límite provincial (FAO GAUL nivel 2) y se informan
+//      resultados por provincia.
 //
 // ⚠️ Fechas, umbrales y área de búsqueda son parámetros de partida:
 //    verificar sobre el mapa (capas RGB y falso color).
@@ -126,6 +129,33 @@ var perimetro = ee.Feature(poligonosOrdenados.first());
 var geomPerimetro = perimetro.geometry();
 
 
+// ---------------- 2b. SEPARACIÓN POR PROVINCIA ----------------
+// El polígono une los incendios de Ávila y de Madrid. Se separa con el
+// límite provincial de FAO GAUL (nivel 2). GAUL es una cartografía de
+// escala global: el límite puede desviarse cientos de metros del oficial
+// (IGN). Además, un límite provincial separa territorios, no incendios:
+// si uno de los fuegos cruzó al otro lado, la separación es aproximada.
+var provincias = ee.FeatureCollection('FAO/GAUL/2015/level2')
+  .filter(ee.Filter.eq('ADM0_NAME', 'Spain'))
+  .filterBounds(geomPerimetro);
+print('Provincias que toca el perímetro:', provincias.aggregate_array('ADM2_NAME'));
+
+var perimetroProv = provincias.map(function (prov) {
+  var pieza = geomPerimetro.intersection(prov.geometry(), 50);
+  return ee.Feature(pieza, {
+    provincia: prov.get('ADM2_NAME'),
+    codigo: prov.get('ADM2_CODE'),
+    ha: pieza.area(50).divide(1e4)
+  });
+}).filter(ee.Filter.gt('ha', 1));
+
+// Ráster con el código de provincia, para cruzar con la severidad
+var provRaster = provincias.reduceToImage(['ADM2_CODE'], ee.Reducer.first()).rename('prov');
+var nombresProv = ee.Dictionary.fromLists(
+  provincias.aggregate_array('ADM2_CODE').map(function (c) { return ee.Number(c).toInt().format('%d'); }),
+  provincias.aggregate_array('ADM2_NAME'));
+
+
 // ---------------- 3. OFFSET Y dNBR CORREGIDO ----------------
 var anillo = geomPerimetro.buffer(CFG.anilloExterno, 50)
   .difference(geomPerimetro.buffer(CFG.anilloInterno, 50), 50);
@@ -201,6 +231,33 @@ var tablaSev = ee.FeatureCollection(ee.List(statsSev.get('groups')).map(function
   });
 }));
 
+// Severidad por provincia (grupo anidado: provincia > severidad)
+var statsProv = haPx.addBands(severidad).addBands(provRaster).reduceRegion({
+  reducer: ee.Reducer.sum()
+    .group({groupField: 1, groupName: 'severidad'})
+    .group({groupField: 2, groupName: 'prov'}),
+  geometry: geomPerimetro,
+  scale: CFG.escala,
+  crs: CFG.crs,
+  maxPixels: 1e10,
+  tileScale: 4
+});
+
+var tablaProv = ee.FeatureCollection(ee.List(statsProv.get('groups')).map(function (gp) {
+  gp = ee.Dictionary(gp);
+  var nombre = nombresProv.get(ee.Number(gp.get('prov')).toInt().format('%d'));
+  return ee.FeatureCollection(ee.List(gp.get('groups')).map(function (g) {
+    g = ee.Dictionary(g);
+    var c = ee.Number(g.get('severidad'));
+    return ee.Feature(null, {
+      provincia: nombre,
+      severidad: c,
+      clase: ee.List(nombresSev).get(c),
+      hectareas: g.get('sum')
+    });
+  }));
+})).flatten();
+
 var haPerimetro = perimetro.get('ha');
 var haModis = haPx.updateMask(modisQuemado).reduceRegion({
   reducer: ee.Reducer.sum(), geometry: area, scale: 500, maxPixels: 1e10
@@ -216,6 +273,18 @@ if (!CFG.soloExportar) {
     fc.features.forEach(function (f) {
       lineas.push(f.properties.severidad + ';' + f.properties.clase + ';' +
                   Math.round(f.properties.hectareas));
+    });
+    print(lineas.join('\n'));
+  });
+  print('Superficie del perímetro por provincia (ha):',
+        perimetroProv.aggregate_array('provincia'), perimetroProv.aggregate_array('ha'));
+  tablaProv.evaluate(function (fc, error) {
+    if (error) { print('Error en estadísticas por provincia:', error); return; }
+    var lineas = ['--- Hectáreas por provincia y severidad ---',
+                  'provincia;clase;severidad;hectareas'];
+    fc.features.forEach(function (f) {
+      var p = f.properties;
+      lineas.push(p.provincia + ';' + p.severidad + ';' + p.clase + ';' + Math.round(p.hectareas));
     });
     print(lineas.join('\n'));
   });
@@ -237,6 +306,7 @@ if (!CFG.soloExportar) {
   Map.addLayer(ee.Image().paint(ee.FeatureCollection([perimetro]), 1, 2),
     {palette: ['000000']}, 'Perímetro');
   Map.addLayer(ee.Image().paint(anillo, 1, 1), {palette: ['0000ff']}, 'Anillo para el offset', false);
+  Map.addLayer(ee.Image().paint(provincias, 1, 2), {palette: ['00bcd4']}, 'Límites provinciales (GAUL)');
   Map.addLayer(poligonosOrdenados.limit(5).style({color: 'ff00ff', fillColor: '00000000'}),
     {}, 'Otros polígonos candidatos (control)', false);
 
@@ -304,6 +374,27 @@ Export.table.toDrive({
   description: 'Tietar_perimetro_v1',
   folder: CFG.carpetaDrive,
   fileFormat: 'GeoJSON'
+});
+
+Export.table.toAsset({
+  collection: perimetroProv,
+  description: 'Asset_Tietar_perimetro_provincias_v1',
+  assetId: CFG.assetPerimetro + '_provincias'
+});
+
+Export.table.toDrive({
+  collection: perimetroProv,
+  description: 'Tietar_perimetro_provincias_v1',
+  folder: CFG.carpetaDrive,
+  fileFormat: 'GeoJSON'
+});
+
+Export.table.toDrive({
+  collection: tablaProv,
+  description: 'Tietar_severidad_provincias_hectareas',
+  folder: CFG.carpetaDrive,
+  fileFormat: 'CSV',
+  selectors: ['provincia', 'severidad', 'clase', 'hectareas']
 });
 
 Export.table.toDrive({
