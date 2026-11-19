@@ -24,7 +24,7 @@ Evaluación post-incendio de emergencia y priorización de la restauración con 
 
 | Fase | Contenido | Estado |
 |---|---|---|
-| 1 · Perímetro y severidad | dNBR y RBR con Sentinel-2, perímetro propio, clases de severidad | 🔄 En curso |
+| 1 · Perímetro y severidad | dNBR y RBR con Sentinel-2, perímetro propio, clases de severidad, separación por provincia | ✅ |
 | 2 · Vegetación previa | Mapa Forestal de España: especies rebrotadoras, germinadoras y exóticas | ⏳ |
 | 3 · Riesgo de erosión | Pendiente, severidad y lluvia: prioridades de estabilización | ⏳ |
 | 4 · Priorización | Multicriterio: dejar regenerar, estabilizar, restaurar con nativas o monitorear | ⏳ |
@@ -51,8 +51,35 @@ Script: [`gee/01_perimetro_severidad.js`](gee/01_perimetro_severidad.js)
 
 6. **RBR** (Parks et al., 2014) como métrica complementaria, más comparable entre tipos de vegetación.
 7. **Referencia independiente:** área quemada de MODIS MCD64A1 (500 m), si ya está disponible para el período.
+8. **Separación por provincia:** el polígono resultante une los incendios simultáneos de Ávila y de Madrid, y el fuego también cruzó el Tiétar hacia Toledo. Por eso se separa con el límite provincial de FAO GAUL.
 
-**Resultados:** *pendientes de ejecución.*
+### Resultados
+
+Insumos: 80 escenas de Sentinel-2 pre-incendio y 79 post-incendio. Offset de dNBR: +12 (las fechas pre y post son comparables).
+
+| | Ávila | Madrid | Toledo | **Total** |
+|---|---:|---:|---:|---:|
+| Perímetro (ha) | 43.981 | 24.279 | 2.325 | **70.585** |
+| **Superficie quemada (ha)** | **39.151** | **21.112** | **1.785** | **62.048** |
+| Severidad baja | 12.513 | 8.406 | 1.029 | 21.948 |
+| Severidad moderada-baja | 10.877 | 6.446 | 444 | 17.767 |
+| Severidad moderada-alta | 9.176 | 4.278 | 244 | 13.698 |
+| Severidad alta | 6.585 | 1.982 | 68 | 8.635 |
+| % moderada-alta + alta | **40%** | 30% | 17% | 36% |
+
+*La superficie quemada excluye las islas sin quemar dentro del perímetro (8.212 ha en total).*
+
+- **El perímetro total (70.585 ha) coincide con la cifra oficial combinada de los incendios de Ávila y Madrid** (más de 70.000 ha).
+- **La parte de Ávila (43.981 ha de perímetro) queda por debajo de las más de 50.000 ha publicadas para "el incendio de Ávila".** No se pudo determinar la causa. Una posibilidad es que la cifra publicada contabilice el incendio y no la provincia, incluyendo superficie quemada en Toledo o en Madrid. Otra es que se trate de una estimación preliminar.
+- **En Ávila el fuego fue más severo:** 40% de severidad moderada-alta o alta, frente a 30% en Madrid. La relación con el tipo de vegetación (por ejemplo, pinares de ladera) se evaluará en la fase 2.
+- **MODIS MCD64A1** registra 59.985 ha quemadas en toda el área de búsqueda (a 500 m de resolución). Es el mismo orden de magnitud y confirma la detección, aunque no permite separar incendios.
+
+### Limitaciones de la fase 1
+
+- **Límite provincial aproximado:** FAO GAUL es una cartografía de escala global y puede desviarse cientos de metros del límite oficial del IGN. Además, un límite provincial separa territorios, no incendios.
+- **Severidad baja:** un dNBR de 100 a 269 es una señal débil que también puede deberse a pastos secándose en verano. Está pendiente revisarla con inspección de píxeles.
+- **Cultivos dentro del perímetro:** se excluyen para delimitar, pero reciben clase de severidad, y la cosecha podría inflar su dNBR.
+- **Sin validación de campo:** los umbrales de Key y Benson (2006) se definieron para bosques de Norteamérica. Su ajuste al monte mediterráneo no está verificado en este proyecto.
 
 ## Datos
 
@@ -62,6 +89,7 @@ Script: [`gee/01_perimetro_severidad.js`](gee/01_perimetro_severidad.js)
 | Cloud Score+ | Máscara de nubes | `GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED` |
 | ESA WorldCover 2021 | Exclusión de agua, urbano y cultivos | `ESA/WorldCover/v200` |
 | MODIS MCD64A1 | Área quemada de referencia | `MODIS/061/MCD64A1` |
+| FAO GAUL 2015 (nivel 2) | Límites provinciales | `FAO/GAUL/2015/level2` |
 
 Sistema de referencia de las salidas: **ETRS89 / UTM 30N (EPSG:25830)**, el oficial en la España peninsular.
 
